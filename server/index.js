@@ -175,15 +175,60 @@ app.get('/api/metrics', async (req, res) => {
 
       // 分析设备类型
       const ua = log.userAgent.toLowerCase();
-      if (ua.includes('bot') || ua.includes('spider') || ua.includes('crawler')) {
+      // 首先检查是否为爬虫
+      if (
+        ua.includes('bot') || 
+        ua.includes('spider') || 
+        ua.includes('crawler') ||
+        ua.includes('googlebot') ||
+        ua.includes('baiduspider') ||
+        ua.includes('bingbot') ||
+        ua.includes('yandexbot') ||
+        ua.includes('slurp') ||
+        ua.includes('duckduckbot') ||
+        ua.includes('python-requests') ||
+        ua.includes('go-http-client') ||
+        ua.includes('censysinspect')
+      ) {
         devices.bot++;
-      } else if (ua.includes('mobile') || ua.includes('android') || ua.includes('iphone')) {
-        devices.mobile++;
-      } else if (ua.includes('ipad') || ua.includes('tablet')) {
+      }
+      // 检查是否为平板设备（优先级高于移动设备，避免误判）
+      else if (
+        ua.includes('ipad') ||
+        ua.includes('tablet') ||
+        (ua.includes('android') && !ua.includes('mobile')) ||
+        ua.includes('kindle') ||
+        ua.includes('playbook')
+      ) {
         devices.tablet++;
-      } else if (ua.includes('windows') || ua.includes('macintosh') || ua.includes('linux')) {
+      }
+      // 检查是否为移动设备
+      else if (
+        ua.includes('iphone') ||
+        ua.includes('ipod') ||
+        (ua.includes('android') && ua.includes('mobile')) ||
+        ua.includes('windows phone') ||
+        ua.includes('blackberry') ||
+        ua.includes('webos') ||
+        ua.includes('iemobile') ||
+        ua.includes('mobile')
+      ) {
+        devices.mobile++;
+      }
+      // 检查是否为桌面设备
+      else if (
+        ua.includes('windows') ||
+        ua.includes('macintosh') ||
+        ua.includes('x11') ||
+        (ua.includes('linux') && !ua.includes('android')) ||
+        ua.includes('ubuntu') ||
+        (ua.includes('firefox') && !ua.includes('mobile')) ||
+        (ua.includes('chrome') && !ua.includes('mobile') && !ua.includes('android'))
+      ) {
         devices.desktop++;
-      } else {
+      }
+      // 其他未知设备
+      else {
         devices.other++;
       }
     });
@@ -245,8 +290,18 @@ app.get('/api/traffic', async (req, res) => {
       }
     };
 
-    // 分析流量来源
+    // 统计设备类型
+    const devices = {
+      desktop: 0,
+      mobile: 0,
+      tablet: 0,
+      bot: 0,
+      other: 0
+    };
+
+    // 分析流量来源和设备类型
     sortedLogs.forEach(log => {
+      // 分析流量来源
       if (!log.referer || log.referer === '-') {
         sources.direct++;
       } else if (
@@ -274,11 +329,71 @@ app.get('/api/traffic', async (req, res) => {
       } else {
         sources.referral++;
       }
+
+      // 分析设备类型
+      const ua = log.userAgent.toLowerCase();
+      // 首先检查是否为爬虫
+      if (
+        ua.includes('bot') || 
+        ua.includes('spider') || 
+        ua.includes('crawler') ||
+        ua.includes('googlebot') ||
+        ua.includes('baiduspider') ||
+        ua.includes('bingbot') ||
+        ua.includes('yandexbot') ||
+        ua.includes('slurp') ||
+        ua.includes('duckduckbot') ||
+        ua.includes('python-requests') ||
+        ua.includes('go-http-client') ||
+        ua.includes('censysinspect')
+      ) {
+        devices.bot++;
+      }
+      // 检查是否为平板设备（优先级高于移动设备，避免误判）
+      else if (
+        ua.includes('ipad') ||
+        ua.includes('tablet') ||
+        (ua.includes('android') && !ua.includes('mobile')) ||
+        ua.includes('kindle') ||
+        ua.includes('playbook')
+      ) {
+        devices.tablet++;
+      }
+      // 检查是否为移动设备
+      else if (
+        ua.includes('iphone') ||
+        ua.includes('ipod') ||
+        (ua.includes('android') && ua.includes('mobile')) ||
+        ua.includes('windows phone') ||
+        ua.includes('blackberry') ||
+        ua.includes('webos') ||
+        ua.includes('iemobile') ||
+        ua.includes('mobile')
+      ) {
+        devices.mobile++;
+      }
+      // 检查是否为桌面设备
+      else if (
+        ua.includes('windows') ||
+        ua.includes('macintosh') ||
+        ua.includes('x11') ||
+        (ua.includes('linux') && !ua.includes('android')) ||
+        ua.includes('ubuntu') ||
+        (ua.includes('firefox') && !ua.includes('mobile')) ||
+        (ua.includes('chrome') && !ua.includes('mobile') && !ua.includes('android'))
+      ) {
+        devices.desktop++;
+      }
+      // 其他未知设备
+      else {
+        devices.other++;
+      }
     });
 
     res.json({
       hourly,
-      sources
+      sources,
+      devices
     });
   } catch (error) {
     console.error('处理流量数据时出错:', error);

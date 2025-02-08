@@ -315,38 +315,39 @@ function App() {
           {/* 设备类型分布 */}
           <div className="bg-white p-6 rounded-xl shadow-sm">
             <h2 className="text-lg font-semibold mb-4">设备类型分布</h2>
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={[
-                      { name: '桌面端', value: metrics?.devices?.desktop || 0 },
-                      { name: '移动端', value: metrics?.devices?.mobile || 0 },
-                      { name: '平板', value: metrics?.devices?.tablet || 0 },
-                      { name: '爬虫', value: metrics?.devices?.bot || 0 },
-                      { name: '其他', value: metrics?.devices?.other || 0 }
-                    ]}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    dataKey="value"
-                  >
-                    {[
-                      { fill: '#3B82F6' },
-                      { fill: '#60A5FA' },
-                      { fill: '#93C5FD' },
-                      { fill: '#BFDBFE' },
-                      { fill: '#DBEAFE' }
-                    ].map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.fill} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
+            <div className="space-y-4">
+              {[
+                { name: '桌面端', value: trafficData?.devices?.desktop || 0, color: '#3B82F6' },
+                { name: '移动端', value: trafficData?.devices?.mobile || 0, color: '#60A5FA' },
+                { name: '平板', value: trafficData?.devices?.tablet || 0, color: '#93C5FD' },
+                { name: '爬虫', value: trafficData?.devices?.bot || 0, color: '#BFDBFE' },
+                { name: '其他', value: trafficData?.devices?.other || 0, color: '#DBEAFE' }
+              ].map((device, index) => {
+                const values = Object.values(trafficData?.devices || {}).filter(val => typeof val === 'number');
+                const total = values.length > 0 ? values.reduce((sum, val) => sum + (val || 0), 0) : 1;
+                const percentage = total === 0 ? '0.0' : ((device.value / total) * 100).toFixed(1);
+                
+                return (
+                  <div key={index} className="p-4 rounded-lg hover:bg-gray-50">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: device.color }} />
+                        <span className="font-medium">{device.name}</span>
+                      </div>
+                      <div className="flex items-center space-x-4">
+                        <span className="text-gray-600">{device.value.toLocaleString()} 访问</span>
+                        <span className="text-gray-500">{percentage}%</span>
+                      </div>
+                    </div>
+                    <div className="mt-2 w-full bg-gray-100 rounded-full h-2">
+                      <div
+                        className="bg-blue-500 h-2 rounded-full"
+                        style={{ width: `${percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
