@@ -50,6 +50,20 @@ interface TrafficData {
       timestamp: string;
     }[]>;
   };
+  geoDistribution?: {
+    provinces: Array<{
+      name: string;
+      count: number;
+      cities?: Array<{
+        name: string;
+        count: number;
+      }>;
+    }>;
+    countries?: Array<{
+      name: string;
+      count: number;
+    }>;
+  };
 }
 
 interface MetricCardProps {
@@ -87,29 +101,62 @@ function App() {
   const [expandedSources, setExpandedSources] = useState<boolean[]>(new Array(4).fill(false));
 
   // 获取指标数据
-  const fetchMetrics = async () => {
+  const fetchMetrics = async (retryCount = 0) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/metrics`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+
+      const response = await fetch(`${API_BASE_URL}/api/metrics`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
       if (!response.ok) throw new Error('获取指标数据失败');
       const data = await response.json();
       setMetrics(data);
+      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '获取数据失败');
+      if (err.name === 'AbortError') {
+        setError('请求超时，正在重试...');
+      } else {
+        setError(err instanceof Error ? err.message : '获取数据失败');
+      }
       console.error('获取指标数据错误:', err);
+
+      // 重试逻辑
+      if (retryCount < 3) {
+        setTimeout(() => fetchMetrics(retryCount + 1), 1000 * (retryCount + 1));
+      }
     }
   };
 
   // 获取流量数据
-  const fetchTraffic = async () => {
+  const fetchTraffic = async (retryCount = 0) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/traffic`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+
+      const response = await fetch(`${API_BASE_URL}/api/traffic`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
       if (!response.ok) throw new Error('获取流量数据失败');
       const data = await response.json();
       setTrafficData(data);
-      console.log('Traffic data:', data);
+      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '获取数据失败');
+      if (err.name === 'AbortError') {
+        setError('请求超时，正在重试...');
+      } else {
+        setError(err instanceof Error ? err.message : '获取数据失败');
+      }
       console.error('获取流量数据错误:', err);
+
+      // 重试逻辑
+      if (retryCount < 3) {
+        setTimeout(() => fetchTraffic(retryCount + 1), 1000 * (retryCount + 1));
+      }
     }
   };
 
@@ -349,6 +396,87 @@ function App() {
                 );
               })}
             </div>
+          </div>
+        </div>
+
+        {/* 属地流量来源分析 */}
+        <div className="bg-white p-6 rounded-xl shadow-sm mb-8">
+          <h2 className="text-lg font-semibold mb-4">属地流量来源分析</h2>
+          <div className="space-y-4">
+            {trafficData?.geoDistribution?.provinces
+              ?.sort((a, b) => b.count - a.count)
+              .slice(0, 10)
+              .map((province, index) => {
+                const total = trafficData.geoDistribution?.provinces?.reduce((sum, p) => sum + p.count, 0) || 1;
+                const percentage = ((province.count / total) * 100).toFixed(1);
+                
+                return (
+                  <div key={index} className="space-y-2">
+                    <div 
+                      className={`p-4 rounded-lg ${province.cities ? 'cursor-pointer hover:bg-gray-50' : ''}`}
+                      onClick={() => province.cities && setExpandedSources(prev => {
+                        const newState = [...prev];
+                        newState[index + 10] = !newState[index + 10];
+                        return newState;
+                      })}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-3 h-3 rounded-full" style={{ backgroundColor: `hsl(${index * 20}, 70%, 50%)` }} />
+                          <span className="font-medium">{province.name}</span>
+                        </div>
+                        <div className="flex items-center space-x-4">
+                          <span className="text-gray-600">{province.count.toLocaleString()} 访问</span>
+                          <span className="text-gray-500">{percentage}%</span>
+                          {province.cities && (
+                            <svg
+                              className={`w-5 h-5 transform transition-transform ${expandedSources[index + 10] ? 'rotate-180' : ''}`}
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-2 w-full bg-gray-100 rounded-full h-2">
+                        <div
+                          className="bg-blue-500 h-2 rounded-full"
+                          style={{ width: `${percentage}%` }}
+                        />
+                      </div>
+                    </div>
+                    
+                    {expandedSources[index + 10] && province.cities && (
+                      <div className="ml-6 space-y-2 border-l-2 border-gray-100 pl-4">
+                        {province.cities
+                          .sort((a, b) => b.count - a.count)
+                          .map((city, cityIndex) => {
+                            const cityPercentage = ((city.count / province.count) * 100).toFixed(1);
+                            return (
+                              <div key={cityIndex} className="p-3 rounded-lg">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">{city.name}</span>
+                                  <div className="flex items-center space-x-4">
+                                    <span className="text-gray-600">{city.count.toLocaleString()} 访问</span>
+                                    <span className="text-gray-500">{cityPercentage}%</span>
+                                  </div>
+                                </div>
+                                <div className="mt-2 w-full bg-gray-100 rounded-full h-1">
+                                  <div
+                                    className="bg-blue-300 h-1 rounded-full"
+                                    style={{ width: `${cityPercentage}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         </div>
 

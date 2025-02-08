@@ -4,9 +4,18 @@ import rateLimit from 'express-rate-limit';
 import { promises as fs } from 'fs';
 import { parse } from 'url';
 import { format } from 'date-fns';
+import { initIPDB, queryIPLocation, setupAutoUpdate } from './ipdb.js';
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// 初始化IP地址库并设置自动更新
+initIPDB().then(() => {
+  console.log('IP地址库初始化完成');
+  setupAutoUpdate();
+}).catch(error => {
+  console.error('IP地址库初始化失败:', error);
+});
 
 // Nginx日志文件路径配置
 const NGINX_LOG_PATHS = process.env.NGINX_LOG_PATHS ? 
@@ -29,26 +38,106 @@ app.use(limiter);
 app.use(express.json());
 
 // Nginx日志解析函数
-const parseNginxLog = (line) => {
-  // 支持默认的combined日志格式
-  const regex = /^(\S+) - - \[([^\]]+)\] "(\S+) ([^"]*)" (\d+) (\d+) "([^"]*)" "([^"]*)"/;
+// 在parseNginxLog函数中添加IP地理位置信息
+const parseNginxLog = async (line) => {
+  // 更新正则表达式以更好地处理特殊字符、可选字段和空请求
+  const regex = /^(\S+) \S+ \S+ \[([^\]]+)\] "([^"]*)" (\d+) (\d+)(?: "([^"]*)" "([^"]*)"|.*)/;
   const matches = line.match(regex);
   
-  if (!matches) return null;
+  if (!matches) {
+    console.warn('无法解析的日志行:', line);
+    return null;
+  }
   
   try {
+    const ipLocation = await queryIPLocation(matches[1]);
+    const timestamp = matches[2];
+    
+    // 改进时间戳解析逻辑
+    const parseTimestamp = (timestamp) => {
+      try {
+        const months = {
+          Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
+          Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12'
+        };
+
+        if (!timestamp || typeof timestamp !== 'string') {
+          throw new Error('Invalid timestamp format');
+        }
+
+        const parts = timestamp.split(' ');
+        if (parts.length !== 2) {
+          throw new Error('Invalid timestamp parts');
+        }
+
+        const [datePart, timezone] = parts;
+        const [day, month, yearTime] = datePart.split('/');
+        if (!day || !month || !yearTime) {
+          throw new Error('Invalid date parts');
+        }
+
+        const [year, ...timeParts] = yearTime.split(':');
+        const time = timeParts.join(':');
+        if (!year || !time) {
+          throw new Error('Invalid year or time');
+        }
+
+        const [hour, minute, second] = time.split(':');
+        if (!hour || !minute || !second) {
+          throw new Error('Invalid time parts');
+        }
+
+        const monthNum = months[month];
+        if (!monthNum) {
+          throw new Error('Invalid month');
+        }
+
+        const dateStr = `${year}-${monthNum}-${day.padStart(2, '0')}T${hour}:${minute}:${second}.000${timezone.replace(':', '')}`;        
+        const date = new Date(dateStr);
+
+        if (isNaN(date.getTime())) {
+          throw new Error('Invalid date');
+        }
+
+        return date.toISOString();
+      } catch (error) {
+        console.error('时间戳解析失败:', timestamp, error.message);
+        return new Date().toISOString(); // 返回当前时间作为默认值
+      }
+    };
+
+    // 解析请求行
+    const parseRequest = (request) => {
+      try {
+        const [method, path] = request.split(' ');
+        return {
+          method: method || 'UNKNOWN',
+          path: path ? parse(path).pathname || path : '/'
+        };
+      } catch (error) {
+        return {
+          method: 'UNKNOWN',
+          path: '/'
+        };
+      }
+    };
+
+    const request = parseRequest(matches[3]);
+    
     return {
       ip: matches[1],
-      timestamp: matches[2],
-      method: matches[3].split(' ')[0],
-      path: parse(matches[4].split(' ')[0]).pathname || matches[4].split(' ')[0],
-      status: parseInt(matches[5]),
-      bytes: parseInt(matches[6]),
-      referer: matches[7],
-      userAgent: matches[8]
+      ipLocation,
+      timestamp: parseTimestamp(timestamp),
+      method: request.method,
+      path: request.path,
+      status: parseInt(matches[4]) || 0,
+      bytes: parseInt(matches[5]) || 0,
+      referer: matches[6] || '-',
+      userAgent: matches[7] || '-'
     };
   } catch (error) {
-    console.error('日志行解析错误:', line);
+    console.error('日志解析出错:', error.message);
+    console.error('问题日志行:', line);
     return null;
   }
 };
@@ -66,13 +155,11 @@ async function readAllLogs() {
       }
       
       const logContent = await fs.readFile(logPath, 'utf-8');
-      const logs = logContent
-        .split('\n')
-        .filter(Boolean)
-        .map(parseNginxLog)
-        .filter(Boolean);
+      const logLines = logContent.split('\n').filter(Boolean);
+      const parsedLogs = await Promise.all(logLines.map(line => parseNginxLog(line)));
+      const validLogs = parsedLogs.filter(Boolean);
       
-      allLogs = [...allLogs, ...logs];
+      allLogs = [...allLogs, ...validLogs];
     } catch (error) {
       console.error(`读取日志文件失败 ${logPath}:`, error);
     }
@@ -93,8 +180,16 @@ app.get('/api/metrics', async (req, res) => {
     // 计算指标
     const now = new Date();
     const last24Hours = logs.filter(log => {
-      const logDate = new Date(log.timestamp.replace(':', ' '));
-      return (now - logDate) <= 24 * 60 * 60 * 1000;
+      if (!log || !log.timestamp) return false;
+      try {
+        const logDate = new Date(log.timestamp);
+        if (isNaN(logDate.getTime())) return false;
+        
+        return (now - logDate) <= 24 * 60 * 60 * 1000;
+      } catch (error) {
+        console.error('解析时间戳失败:', error);
+        return false;
+      }
     });
 
     const metrics = {
@@ -103,8 +198,44 @@ app.get('/api/metrics', async (req, res) => {
       popularPages: {},
       statusCodes: {},
       userAgents: {},
-      ipAddresses: new Set(logs.map(log => log.ip)).size
+      ipAddresses: new Set(logs.map(log => log.ip)).size,
+      geoDistribution: {
+        provinces: []
+      }
     };
+
+    // 处理IP地理位置分布
+    const locationMap = new Map();
+    logs.forEach(log => {
+      if (log.ipLocation && log.ipLocation.region) {
+        const key = log.ipLocation.region;
+        const cityKey = log.ipLocation.city || '未知城市';
+        
+        if (!locationMap.has(key)) {
+          locationMap.set(key, {
+            name: key,
+            count: 1,
+            cities: new Map().set(cityKey, { name: cityKey, count: 1 })
+          });
+        } else {
+          const province = locationMap.get(key);
+          province.count++;
+          
+          if (province.cities.has(cityKey)) {
+            province.cities.get(cityKey).count++;
+          } else {
+            province.cities.set(cityKey, { name: cityKey, count: 1 });
+          }
+        }
+      }
+    });
+
+    // 转换Map为数组格式
+    metrics.geoDistribution.provinces = Array.from(locationMap.values()).map(province => ({
+      name: province.name,
+      count: province.count,
+      cities: Array.from(province.cities.values())
+    }));
 
     // 处理日志数据
     const sources = {
@@ -253,10 +384,22 @@ app.get('/api/traffic', async (req, res) => {
 
     // 按时间排序的日志
     const sortedLogs = logs
-      .map(log => ({
-        ...log,
-        dateObj: new Date(log.timestamp.replace(':', ' '))
-      }))
+      .filter(log => log && log.timestamp)
+      .map(log => {
+        try {
+          const dateObj = new Date(log.timestamp);
+          if (isNaN(dateObj.getTime())) return null;
+          
+          return {
+            ...log,
+            dateObj
+          };
+        } catch (error) {
+          console.error('解析时间戳失败:', error);
+          return null;
+        }
+      })
+      .filter(Boolean)
       .sort((a, b) => a.dateObj - b.dateObj);
 
     // 按小时统计访问量
@@ -390,10 +533,54 @@ app.get('/api/traffic', async (req, res) => {
       }
     });
 
+    // 处理地理位置分布数据
+    const geoDistribution = {
+      provinces: []
+    };
+
+    // 使用Map来统计省份和城市的访问量
+    const provinceMap = new Map();
+
+    for (const log of sortedLogs) {
+      if (!log.ipLocation) continue;
+
+      const region = log.ipLocation.region || '未知地区';
+      const city = log.ipLocation.city || '未知城市';
+
+      // 跳过错误或未知的地区
+      if (region === 'Error' || region === 'Unknown') continue;
+
+      if (!provinceMap.has(region)) {
+        provinceMap.set(region, {
+          name: region,
+          count: 1,
+          cities: new Map([[city, 1]])
+        });
+      } else {
+        const province = provinceMap.get(region);
+        province.count++;
+
+        const cities = province.cities;
+        cities.set(city, (cities.get(city) || 0) + 1);
+      }
+    }
+
+    // 转换Map数据为数组格式
+    geoDistribution.provinces = Array.from(provinceMap.values())
+      .map(province => ({
+        name: province.name,
+        count: province.count,
+        cities: Array.from(province.cities.entries())
+          .map(([name, count]) => ({ name, count }))
+          .sort((a, b) => b.count - a.count)
+      }))
+      .sort((a, b) => b.count - a.count);
+
     res.json({
       hourly,
       sources,
-      devices
+      devices,
+      geoDistribution
     });
   } catch (error) {
     console.error('处理流量数据时出错:', error);
