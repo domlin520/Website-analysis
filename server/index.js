@@ -1,6 +1,8 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import session from 'express-session';
 import { promises as fs } from 'fs';
 import { parse } from 'url';
 import { format } from 'date-fns';
@@ -33,9 +35,57 @@ const limiter = rateLimit({
   max: 100 // 每个IP限制100次请求
 });
 
-app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:5173',
+  credentials: true
+}));
 app.use(limiter);
 app.use(express.json());
+
+// 配置session中间件
+app.use(session({
+  secret: 'nginx-analyzer-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: process.env.NODE_ENV === 'production' }
+}));
+
+// 身份验证中间件
+const authMiddleware = (req, res, next) => {
+  if (req.session.isAuthenticated) {
+    next();
+  } else {
+    res.status(401).json({ error: '未登录或会话已过期' });
+  }
+};
+
+// 登录路由
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  
+  if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
+    req.session.isAuthenticated = true;
+    res.json({ success: true, message: '登录成功' });
+  } else {
+    res.status(401).json({ error: '用户名或密码错误' });
+  }
+});
+
+// 登出路由
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(err => {
+    if (err) {
+      res.status(500).json({ error: '登出失败' });
+    } else {
+      res.json({ success: true, message: '登出成功' });
+    }
+  });
+});
+
+// 获取当前登录状态
+app.get('/api/auth/status', (req, res) => {
+  res.json({ isAuthenticated: !!req.session.isAuthenticated });
+});
 
 // Nginx日志解析函数
 // 在parseNginxLog函数中添加IP地理位置信息

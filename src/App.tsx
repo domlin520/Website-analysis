@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart as LucideBarChart, Activity, Users, Clock, ArrowUpRight } from 'lucide-react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BarChart as LucideBarChart, Activity, Users, Clock, ArrowUpRight, LogOut } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { format, subDays } from 'date-fns';
+import Login from './components/Login';
 
 // API配置
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -99,6 +101,46 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState('7');
   const [expandedSources, setExpandedSources] = useState<boolean[]>(new Array(4).fill(false));
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('isAuthenticated') === 'true';
+  });
+
+  // 登出处理函数
+  const handleLogout = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/logout`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        setIsAuthenticated(false);
+        localStorage.removeItem('isAuthenticated');
+      }
+    } catch (error) {
+      console.error('登出失败:', error);
+    }
+  };
+
+  useEffect(() => {
+    // 检查登录状态
+    const checkAuthStatus = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/status`, {
+          credentials: 'include'
+        });
+        const data = await response.json();
+        setIsAuthenticated(data.isAuthenticated);
+        localStorage.setItem('isAuthenticated', data.isAuthenticated.toString());
+      } catch (err) {
+        console.error('检查登录状态失败:', err);
+        setIsAuthenticated(false);
+        localStorage.removeItem('isAuthenticated');
+      }
+    };
+
+    checkAuthStatus();
+  }, []);
 
   // 获取指标数据
   const fetchMetrics = async (retryCount = 0) => {
@@ -162,6 +204,22 @@ function App() {
 
   // 初始化数据加载
   useEffect(() => {
+    // 检查登录状态
+    const checkAuthStatus = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/status`);
+        const data = await response.json();
+        setIsAuthenticated(data.isAuthenticated);
+      } catch (err) {
+        console.error('检查登录状态失败:', err);
+        setIsAuthenticated(false);
+      }
+    };
+
+    checkAuthStatus();
+  }, []);
+
+  useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       await Promise.all([fetchMetrics(), fetchTraffic()]);
@@ -199,23 +257,49 @@ function App() {
     );
   }
 
+  // 受保护的路由组件
+  const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+    if (!isAuthenticated) {
+      return <Navigate to="/login" replace />;
+    }
+    return <>{children}</>;
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">简历平台数据分析</h1>
-          <div className="flex space-x-4">
-            <select
-              className="bg-white border border-gray-300 rounded-lg px-4 py-2"
-              value={timeRange}
-              onChange={(e) => setTimeRange(e.target.value)}
+    <Router>
+      <div className="flex flex-col min-h-screen bg-gray-100">
+        <header className="bg-white shadow flex justify-between items-center px-4 py-2">
+          <div className="flex-1"></div>
+          {isAuthenticated && (
+            <button
+              onClick={handleLogout}
+              className="flex items-center text-gray-600 hover:text-gray-900"
             >
-              <option value="7">最近 7 天</option>
-              <option value="30">最近 30 天</option>
-              <option value="90">最近 90 天</option>
-            </select>
-          </div>
-        </div>
+              <LogOut className="w-5 h-5 mr-1" />
+              退出登录
+            </button>
+          )}
+        </header>
+      <Routes>
+        <Route path="/login" element={!isAuthenticated ? <Login setIsAuthenticated={setIsAuthenticated} /> : <Navigate to="/" replace />} />
+        <Route path="/" element={
+          <ProtectedRoute>
+            <div className="min-h-screen bg-gray-50 p-8">
+              <div className="max-w-7xl mx-auto">
+                <div className="flex items-center justify-between mb-8">
+                  <h1 className="text-2xl font-bold text-gray-900">简历平台数据分析</h1>
+                  <div className="flex space-x-4">
+                    <select
+                      className="bg-white border border-gray-300 rounded-lg px-4 py-2"
+                      value={timeRange}
+                      onChange={(e) => setTimeRange(e.target.value)}
+                    >
+                      <option value="7">最近 7 天</option>
+                      <option value="30">最近 30 天</option>
+                      <option value="90">最近 90 天</option>
+                    </select>
+                  </div>
+                </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <MetricCard
@@ -511,10 +595,15 @@ function App() {
                   </div>
                 );
               })}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </ProtectedRoute>
+      } />
+      </Routes>
     </div>
+    </Router>
   );
 }
 
